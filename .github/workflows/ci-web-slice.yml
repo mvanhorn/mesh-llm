@@ -99,8 +99,20 @@ jobs:
           path: ~/.pnpm-store
           key: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-${{ hashFiles('crates/mesh-llm-ui/pnpm-lock.yaml', '.github/cache-version.txt') }}
           restore-keys: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-
+      # TEMPORARY — #1392 root-cause probe, remove before merge.
+      - name: Diagnose pnpm store reuse
+        run: |
+          echo "HOME=$HOME"
+          echo "pnpm --version: $(pnpm --version)"
+          echo "store-dir (config get): $(pnpm config get store-dir)"
+          echo "store path (pnpm store path): $(pnpm store path)"
+          find "$(pnpm store path)" -maxdepth 2 2>&1
+          du -sh "$(pnpm store path)" 2>&1 || true
+          echo "restored tree at ~/.pnpm-store:"
+          find ~/.pnpm-store -maxdepth 2 2>&1
+          du -sh ~/.pnpm-store 2>&1 || true
       - name: Install UI dependencies
-        run: pnpm i --frozen-lockfile
+        run: pnpm i --frozen-lockfile --reporter=append-only 2>&1 | tee /tmp/pnpm-install.log
       - name: Save pnpm store
         if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && steps.pnpm_cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
