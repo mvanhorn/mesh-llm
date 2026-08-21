@@ -89,36 +89,32 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - name: Configure isolated pnpm store
-        run: pnpm config set store-dir ~/.pnpm-store
-      - name: Restore pnpm store
-        id: pnpm_cache
-        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~/.pnpm-store
-          key: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-${{ hashFiles('crates/mesh-llm-ui/pnpm-lock.yaml', '.github/cache-version.txt') }}
-          restore-keys: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-
-      # TEMPORARY — #1392 root-cause probe, remove before merge.
-      - name: Diagnose pnpm store reuse
+      # TEMPORARY — #1392 round 2 probe, remove before merge.
+      # Round 1 (run 32452049769) proved: in-container $HOME is /github/home
+      # (GitHub's fixed container-job HOME, not the image's baked
+      # /home/runner), and the exact-key Actions-cache restore extracts
+      # somewhere that does NOT satisfy /github/home/.pnpm-store/v10 — so the
+      # cache path was broken independent of the store-dir bug. This round
+      # bypasses the Actions cache and pnpm's default (~/.pnpm-store) store
+      # entirely and points store-dir at the literal path warm-dependencies.sh
+      # populated at image-build time (mesh-llm-runner-images
+      # scripts/warm-dependencies.sh:18-20 fetches under HOME=/home/runner,
+      # PNPM_HOME=/home/runner/.local/share/pnpm), read/queried live rather
+      # than guessed.
+      - name: Diagnose and point at the baked pnpm store
         run: |
           echo "HOME=$HOME"
           echo "pnpm --version: $(pnpm --version)"
-          echo "store-dir (config get): $(pnpm config get store-dir)"
-          echo "store path (pnpm store path): $(pnpm store path)"
-          find "$(pnpm store path)" -maxdepth 2 2>&1
-          du -sh "$(pnpm store path)" 2>&1 || true
-          echo "restored tree at ~/.pnpm-store:"
-          find ~/.pnpm-store -maxdepth 2 2>&1
-          du -sh ~/.pnpm-store 2>&1 || true
+          baked_store_dir="$(HOME=/home/runner PNPM_HOME=/home/runner/.local/share/pnpm pnpm config get store-dir)"
+          echo "baked store-dir (as warmed): $baked_store_dir"
+          baked_store_path="$(HOME=/home/runner PNPM_HOME=/home/runner/.local/share/pnpm pnpm store path)"
+          echo "baked store path (as warmed): $baked_store_path"
+          [ -d "$baked_store_path" ] && find "$baked_store_path" -maxdepth 2 2>&1 || echo "$baked_store_path does not exist"
+          du -sh "$baked_store_path" 2>&1 || true
+          pnpm config set store-dir "$baked_store_dir"
+          echo "store-dir now: $(pnpm config get store-dir)"
       - name: Install UI dependencies
         run: pnpm i --frozen-lockfile --reporter=append-only 2>&1 | tee /tmp/pnpm-install.log
-      - name: Save pnpm store
-        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' && steps.pnpm_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~/.pnpm-store
-          key: ${{ steps.pnpm_cache.outputs.cache-primary-key }}
       - name: Lint UI
         run: pnpm run lint
       - name: Type-check UI
